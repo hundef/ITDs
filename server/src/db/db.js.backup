@@ -1,0 +1,199 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, '../../data');
+const DB_FILE = path.join(DATA_DIR, 'database.json');
+
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// In-memory representation synced to JSON
+class DatabaseEngine {
+  constructor() {
+    this.data = {
+      users: [],
+      project_categories: [],
+      technologies: [],
+      projects: [],
+      project_technologies: [],
+      project_features: [],
+      project_workflows: [],
+      project_results: [],
+      project_media: [],
+      project_links: [],
+      services: [],
+      team_members: [],
+      testimonials: [],
+      blog_posts: [],
+      contact_inquiries: [],
+      website_settings: {},
+      activity_logs: [],
+      security_logs: [],
+      security_policy: {
+        max_failed_attempts: 5,
+        lockout_duration_minutes: 15,
+        session_timeout_hours: 168,
+        require_2fa_for_admins: false,
+        password_min_length: 8,
+        password_require_special: true,
+        password_require_number: true,
+        password_expiry_days: 90
+      }
+    };
+    this.load();
+  }
+
+  load() {
+    try {
+      if (fs.existsSync(DB_FILE)) {
+        const raw = fs.readFileSync(DB_FILE, 'utf-8');
+        const parsed = JSON.parse(raw);
+        this.data = {
+          ...this.data,
+          ...parsed,
+          security_logs: parsed.security_logs || [],
+          security_policy: {
+            ...this.data.security_policy,
+            ...(parsed.security_policy || {})
+          }
+        };
+      } else {
+        this.save();
+      }
+    } catch (err) {
+      console.error('Error loading database file:', err);
+    }
+  }
+
+  save() {
+    try {
+      fs.writeFileSync(DB_FILE, JSON.stringify(this.data, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error saving database file:', err);
+    }
+  }
+
+  // Generic collection operations
+  find(table, filterFn = () => true) {
+    if (!this.data[table]) return [];
+    return this.data[table].filter(filterFn);
+  }
+
+  findOne(table, filterFn) {
+    if (!this.data[table]) return null;
+    return this.data[table].find(filterFn) || null;
+  }
+
+  insert(table, item) {
+    if (!this.data[table]) this.data[table] = [];
+    const id = item.id !== undefined ? item.id : Date.now() + Math.floor(Math.random() * 1000);
+    const newItem = {
+      ...item,
+      id,
+      created_at: item.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    this.data[table].push(newItem);
+    this.save();
+    return newItem;
+  }
+
+  update(table, filterFn, updates) {
+    if (!this.data[table]) return null;
+    const index = this.data[table].findIndex(filterFn);
+    if (index === -1) return null;
+    
+    this.data[table][index] = {
+      ...this.data[table][index],
+      ...updates,
+      updated_at: new Date().toISOString()
+    };
+    this.save();
+    return this.data[table][index];
+  }
+
+  delete(table, filterFn) {
+    if (!this.data[table]) return false;
+    const initialLen = this.data[table].length;
+    this.data[table] = this.data[table].filter(item => !filterFn(item));
+    const deleted = this.data[table].length < initialLen;
+    if (deleted) this.save();
+    return deleted;
+  }
+
+  // Settings Key-Value helpers
+  getSetting(key, defaultValue = null) {
+    return this.data.website_settings[key] !== undefined ? this.data.website_settings[key] : defaultValue;
+  }
+
+  getAllSettings() {
+    return this.data.website_settings || {};
+  }
+
+  setSetting(key, value) {
+    this.data.website_settings[key] = value;
+    this.save();
+    return value;
+  }
+
+  setMultipleSettings(obj) {
+    this.data.website_settings = { ...this.data.website_settings, ...obj };
+    this.save();
+    return this.data.website_settings;
+  }
+
+  // Security Policy helpers
+  getSecurityPolicy() {
+    return this.data.security_policy || {
+      max_failed_attempts: 5,
+      lockout_duration_minutes: 15,
+      session_timeout_hours: 168,
+      require_2fa_for_admins: false,
+      password_min_length: 8,
+      password_require_special: true,
+      password_require_number: true,
+      password_expiry_days: 90
+    };
+  }
+
+  setSecurityPolicy(updates) {
+    this.data.security_policy = {
+      ...this.getSecurityPolicy(),
+      ...updates
+    };
+    this.save();
+    return this.data.security_policy;
+  }
+
+  logActivity(userName, userRole, action, targetType, targetName) {
+    this.insert('activity_logs', {
+      user_name: userName || 'System',
+      user_role: userRole || 'Admin',
+      action,
+      target_type: targetType,
+      target_name: targetName,
+      created_at: new Date().toISOString()
+    });
+  }
+
+  logSecurityEvent(userId, userName, userEmail, eventType, severity, ipAddress, userAgent, details) {
+    return this.insert('security_logs', {
+      user_id: userId || null,
+      user_name: userName || 'Anonymous / Guest',
+      user_email: userEmail || 'unknown@domain.com',
+      event_type: eventType, // e.g. 'LOGIN_SUCCESS', 'LOGIN_FAILURE', 'ACCOUNT_LOCKED', 'USER_SUSPENDED'
+      severity: severity || 'info', // 'info' | 'warning' | 'critical' | 'alert'
+      ip_address: ipAddress || '127.0.0.1',
+      user_agent: userAgent || 'Web Browser',
+      details: details || '',
+      created_at: new Date().toISOString()
+    });
+  }
+}
+
+export const db = new DatabaseEngine();
